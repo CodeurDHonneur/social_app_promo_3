@@ -50,8 +50,56 @@ const createRefreshToken = async (userId, userAgent) => {
     return {token, jti, expiresAt};
 }
 
+async function revokeRefreshToken(jti) {
+  try {
+    const result = await RefreshTokenModel.deleteOne({jti});
+
+    return result.deletedCount > 0; // true si un document a été supprimé
+  } catch (error) {
+    console.error("❌ Erreur revokeRefreshToken:", error);
+    return false;
+  }
+};
+
+async function verifyRefreshToken(jti, token) {
+  try {
+    // ✅ 1️⃣ Vérifie le refresh token en BDD
+    const storedToken = await RefreshTokenModel.findOne({ jti});
+     
+  
+    if (!storedToken) {
+      return null; // aucun refresh trouvé en BDD 
+    }
+
+    const veryfToken = await compareValue(token, storedToken.tokenHash);
+    
+    
+    // ✅ 2️⃣ Vérifie si l'utilisateur existe encore
+    if (!veryfToken) {
+      return null; // le token n'est pas valide
+    }
+    
+    // ✅ 3️⃣ Vérifie si l'utilisateur existe encore
+    const user = await UserModel.findById(storedToken.user);
+   
+    if (!user) {
+      return null; // utilisateur supprimé ou introuvable
+    }
+    
+ 
+    return user._id;
+
+  } catch (error) {
+    console.error("❌ Erreur dans getUserIdRefreshToken:", error);
+    throw new Error("Erreur interne lors de la vérification du token");
+  }
+}
+
+
 module.exports = {
     createAccessToken,
     timeToMs,
-    createRefreshToken
+    createRefreshToken,
+    revokeRefreshToken,
+    verifyRefreshToken
 }

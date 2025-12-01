@@ -13,7 +13,7 @@ const {
 } = require("../controllers/user.controller");
 
 router.post("/register", registerUser);
-router.post("/login", loginUser);
+// router.post("/login", loginUser);
 router.post("/logout", logoutUser);
 router.post("/renewAccessToken", renewAccessToken);
 router.get("/:id", getUser);
