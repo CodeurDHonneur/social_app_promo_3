@@ -12,7 +12,7 @@ const hashValue = async (value) => {
     return hashPassword;
 }
 
-const comparaValue = async (value, hashValue) => {
+const compareValue = async (value, hashValue) => {
     const boolean = await bcrypt.compare(value, hashValue);
     return boolean;
 }
@@ -20,5 +20,5 @@ const comparaValue = async (value, hashValue) => {
 
 module.exports = {
     hashValue,
-    comparaValue
+    compareValue
 }

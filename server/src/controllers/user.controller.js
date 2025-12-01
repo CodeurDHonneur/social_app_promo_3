@@ -1,23 +1,17 @@
 const HttpError = require("../models/error.model");
 const UserModel = require("../models/user.model");
-const { hashValue } = require("../utils/hash.util");
+const { createAccessToken, createRefreshToken, timeToMs } = require("../services/token.service");
+const { hashValue, compareValue } = require("../utils/hash.util");
 
 /* Enregistrement d'un utilisateur, POST : api/users/register */
 
-const registerUser = async (req, res, next) => { 
-    console.log("Création d'un utiisateur");
-    /**
-     * fullName
-     * email
-     * password
-     * confirmPassword
-     * req.body
-     */
+const registerUser = async (req, res, next) => {
+
     try {
-        const {fullName, email,  password, confirmPassword} = req.body;
+        const { fullName, email, password, confirmPassword } = req.body;
 
         //vérification des champs obligatoires
-        if(!fullName || !email || !password || !confirmPassword){
+        if (!fullName || !email || !password || !confirmPassword) {
             return next(new HttpError("Merci de remplir les champs", 422));
         }
 
@@ -25,18 +19,18 @@ const registerUser = async (req, res, next) => {
         const lowerCasedEmail = email.toLowerCase();
 
         //Vérification de la conformité des mots de passe
-        if(password !== confirmPassword){
+        if (password !== confirmPassword) {
             return next(new HttpError("Les mots de passe ne correspondent pas. Merci de réessayer", 422));
         }
 
-        if(password.length < 8){
+        if (password.length < 8) {
             return next(new HttpError("Mot de passe trop court, 8 caractère au minimum", 422));
         }
 
 
         //Vérifier si l'adresse mail n'est pas déjà liée à un compte utilisateur
-        const emailExist = await UserModel.findOne({email: lowerCasedEmail});
-        if(emailExist){
+        const emailExist = await UserModel.findOne({ email: lowerCasedEmail });
+        if (emailExist) {
             return next(new HttpError("Désolé, cette adresse mail est déjà utilisée."))
         }
 
@@ -46,15 +40,15 @@ const registerUser = async (req, res, next) => {
 
         //Création du user en bdd
         const newUser = await UserModel.create({
-            fullName, 
+            fullName,
             email: lowerCasedEmail,
             password: hashPassword
         });
-        const {fullName: userFullname} = newUser;
+        const { fullName: userFullname } = newUser;
         res.status(201).json({
             message: `Utilisateur ${userFullname} créé avec succès`
         });
-        
+
     } catch (error) {
         return next(new HttpError(error.message || "Une erreur s'est produite", error.code || 500));
     }
@@ -62,8 +56,56 @@ const registerUser = async (req, res, next) => {
 
 
 /* Méthode de connexion, POST : /api/users/login */
-const loginUser = (req, res, next) => {
+const loginUser = async (req, res, next) => {
+    const { email, password } = req.body;
 
+    //vérifier que les valeurs existent
+    if (!email || !password) {
+        return next(new HttpError("Tous les chams sont requis", 422));
+    }
+
+    //Normalisation de l'adresse mail
+    const lowerCasedEmail = email.toLowerCase();
+
+    //Récherche de l'utilisateur en bdd
+    const user = await UserModel.findOne({email: lowerCasedEmail});
+
+    if(!user){
+        return next(new HttpError("Identifiants invalides", 401));
+    }
+
+    const isMatch = await compareValue(password, user.password);
+
+    if(!isMatch){
+        return next(new HttpError("Identifiants invalides", 401));
+    }
+
+    const payload = {userId: user._id};
+
+    const accessToken = await createAccessToken(payload);
+    const refreshToken = await createRefreshToken(user._id.toString(), req.get("User-Agent"));
+
+    res.cookie("accessToken", accessToken, {
+        httpOnly: true,
+        sameSite: "strict",
+        maxAge: timeToMs(process.env.JWT_ACCESS_TOKEN_EXPIRESIN)
+    });
+
+    res.cookie("refreshToken", JSON.stringify({
+        jti: refreshToken.jti,
+        token: refreshToken.token
+    }), {
+        httpOnly: true,
+        sameSite: "strict",
+        maxAge: timeToMs(process.env.JWT_REFRESH_TOKEN_EXPIRESIN)
+    });
+
+    res.status(200).json({
+        success: true,
+        message: "Connexion réussie",
+        accessToken,
+        
+    });
 }
 
 /* Méthode de déconnexion, POST : /api/users/logout */
@@ -73,7 +115,7 @@ const logoutUser = (req, res, next) => {
 
 /* Rafraîchir le token d'accès à partir du refresh token, POST : /api/users/renewAccessToken */
 const renewAccessToken = (req, res, next) => {
-    
+
 }
 
 /* Méthode de récupération d'un utilisateur,  GET : /api/users/:id */
