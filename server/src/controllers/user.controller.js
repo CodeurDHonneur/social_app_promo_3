@@ -1,6 +1,6 @@
 const HttpError = require("../models/error.model");
 const UserModel = require("../models/user.model");
-const { createAccessToken, createRefreshToken, timeToMs } = require("../services/token.service");
+const { createAccessToken, createRefreshToken, timeToMs, revokeRefreshToken, verifyRefreshToken } = require("../services/token.service");
 const { hashValue, compareValue } = require("../utils/hash.util");
 
 /* Enregistrement d'un utilisateur, POST : api/users/register */
@@ -68,19 +68,19 @@ const loginUser = async (req, res, next) => {
     const lowerCasedEmail = email.toLowerCase();
 
     //Récherche de l'utilisateur en bdd
-    const user = await UserModel.findOne({email: lowerCasedEmail});
+    const user = await UserModel.findOne({ email: lowerCasedEmail });
 
-    if(!user){
+    if (!user) {
         return next(new HttpError("Identifiants invalides", 401));
     }
 
     const isMatch = await compareValue(password, user.password);
 
-    if(!isMatch){
+    if (!isMatch) {
         return next(new HttpError("Identifiants invalides", 401));
     }
 
-    const payload = {userId: user._id};
+    const payload = { userId: user._id };
 
     const accessToken = await createAccessToken(payload);
     const refreshToken = await createRefreshToken(user._id.toString(), req.get("User-Agent"));
@@ -104,33 +104,225 @@ const loginUser = async (req, res, next) => {
         success: true,
         message: "Connexion réussie",
         accessToken,
-        
+
     });
 }
 
 /* Méthode de déconnexion, POST : /api/users/logout */
-const logoutUser = (req, res, next) => {
+const logoutUser = async (req, res, next) => {
+    try {
+        console.log()
+        // ✅ 1️⃣ Récupère les cookies
+        const refreshCookie = req.cookies?.refreshToken || req.cookie?.refreshToken;
 
+        // console.log(req);
+        if (!refreshCookie) {
+            return next(new HttpError("Aucun token de rafraîchissement trouvé", 400));
+        }
+
+        // ✅ 2️⃣ Parse le cookie
+        let parsed;
+        try {
+            parsed = JSON.parse(refreshCookie);
+        } catch {
+            return next(new HttpError("Format de token invalide", 400));
+        }
+
+        const { jti } = parsed;
+
+        // ✅ 3️⃣ Révoque (supprime) le token dans la BDD
+        const deleted = await revokeRefreshToken(jti);
+
+        if (!deleted) {
+            return next(
+                new HttpError(
+                    "Le token n'existe plus",
+                    404
+                )
+            );
+        }
+
+        // ✅ 4️⃣ Supprime les cookies
+        res.clearCookie("accessToken", {
+            httpOnly: true,
+            sameSite: "strict",
+        });
+
+        res.clearCookie("refreshToken", {
+            httpOnly: true,
+            sameSite: "strict",
+        });
+
+        // ✅ 5️⃣ Réponse
+        return res.status(200).json({
+            success: true,
+            message: "Déconnexion réussie 👋",
+        });
+    } catch (error) {
+        return next(new HttpError("Erreur serveur", 500));
+    }
 }
 
 /* Rafraîchir le token d'accès à partir du refresh token, POST : /api/users/renewAccessToken */
-const renewAccessToken = (req, res, next) => {
+const renewAccessToken = async (req, res, next) => {
+    try {
 
+
+        // ✅ 1️⃣ Récupère le cookie de rafraîchissement
+        const refreshCookie = req.cookies?.refreshToken || req.cookie?.refreshToken;
+
+        if (!refreshCookie) {
+            return next(new HttpError("Aucun token de rafraîchissement trouvé", 400));
+        }
+
+
+        // ✅ 2️⃣ Parse le JSON du cookie
+        let parsed;
+        try {
+            parsed = JSON.parse(refreshCookie);
+        } catch {
+            return next(new HttpError("Format de token invalide", 400));
+        }
+        // console.log(parsed);
+        const { jti, token } = parsed;
+
+
+        // ✅ 3️⃣ Récupère l'ID utilisateur depuis la BDD
+        const userId = await verifyRefreshToken(jti, token);
+
+
+        if (!userId) {
+            return next(new HttpError("Token de rafraîchissement invalide ou expiré", 403));
+        }
+        // ✅ 4️⃣ Génère un nouveau token d'accès
+        const accessToken = await createAccessToken({ userId });
+
+        // ✅ 5️⃣ Met à jour le cookie accessToken
+        res.cookie('accessToken', accessToken, {
+            httpOnly: true,
+            sameSite: 'strict',
+            maxAge: timeToMs(process.env.JWT_ACCESS_TOKEN_EXPIRATION_TIME),
+        });
+
+        // ✅ 6️⃣ Réponse au client
+        return res.status(200).json({
+            success: true,
+            message: "Nouveau token généré ✅",
+            accessToken: accessToken,
+        });
+
+    } catch (error) {
+        return next(new HttpError(error.message || "Erreur serveur", 500));
+    }
 }
 
-/* Méthode de récupération d'un utilisateur,  GET : /api/users/:id */
-const getUser = (req, res, next) => {
-
-}
 
 /* Méthode de récupération de tous les utilisateurs, GET : /api/users/all */
-const getUsers = (req, res, next) => {
+const getUsers = async (req, res, next) => {
+    try {
 
+        // ✅ 1️⃣ Récupère les paramètres de pagination depuis la query string
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+
+        // ✅ 2️⃣ Récupère les utilisateurs les plus récents, sans champs sensibles
+        const users = await UserModel.find()
+            .select("-password -email -__v -updatedAt")
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        // ✅ 3️⃣ Compte le total pour la pagination
+        const totalUsers = await UserModel.countDocuments();
+
+        // ✅ 4️⃣ Retourne une réponse cohérente
+        return res.status(200).json({
+            success: true,
+            message: "Liste des utilisateurs récupérée avec succès ✅",
+            totalUsers,
+            currentPage: page,
+            totalPages: Math.ceil(totalUsers / limit),
+            users
+        });
+
+    } catch (error) {
+        return next(new HttpError(error.message || "Erreur serveur", 500));
+    }
 }
 
-/* Méthode de modification d'un utilisateur, PATCH : /api/users/:id */
-const editUser = (req, res, next) => {
 
+/* Méthode de récupération d'un utilisateur,  GET : /api/users/:id */
+const getUser = async (req, res, next) => {
+    try {
+        // ✅ 1️⃣ Récupération de l'ID passé en paramètre d'URL
+        const { id } = req.params;
+
+        // ✅ 2️⃣ Recherche de l'utilisateur en base de données
+        // On exclut certains champs sensibles avec .select()
+        const user = await UserModel.findById(id).select("-password -email -updatedAt -__v");
+
+        // ✅ 3️⃣ Vérifie si l'utilisateur existe
+        if (!user) {
+            return next(new HttpError("Utilisateur non identifié", 404));
+        }
+
+        // ✅ 4️⃣ Retourne les données publiques de l'utilisateur
+        return res.status(200).json({
+            success: true,
+            message: "Utilisateur trouvé ✅",
+            user
+        });
+
+    } catch (error) {
+        console.error("❌ Error in getUser:", error);
+        return next(new HttpError(error.message || "Erreur serveur", 500));
+    }
+};
+
+/* Méthode de modification d'un utilisateur, PATCH : /api/users/:id */
+const editUser = async (req, res, next) => {
+    try {
+        // ✅ 1️⃣ Vérifie que l'utilisateur est connecté
+        if (!req.userId) {
+            return next(new HttpError("Authentication required", 401));
+        }
+
+        // ✅ 2️⃣ Récupère les champs du corps de la requête
+        const { fullName, bio } = req.body;
+
+        // ✅ 3️⃣ Vérifie que les données à mettre à jour existent
+        if (!fullName && !bio) {
+            return next(new HttpError("No data provided to update", 400));
+        }
+
+        // ✅ 4️⃣ Prépare les données à mettre à jour
+        const data = {};
+        if (fullName) data.fullName = fullName;
+        if (bio) data.bio = bio;
+
+
+        // ✅ 5️⃣ Met à jour l'utilisateur connecté
+        const editedUser = await UserModel.findByIdAndUpdate(
+            req.userId,
+            data,
+            { new: true } // retourne la version mise à jour
+        ).select("-password"); // ⚙️ optionnel : retire le mot de passe du résultat
+
+        if (!editedUser) {
+            return next(new HttpError("User not found", 404));
+        }
+
+        // ✅ 6️⃣ Retourne le résultat
+        return res.status(200).json({
+            success: true,
+            message: "Profile updated successfully ✅",
+            user: editedUser
+        });
+
+    } catch (error) {
+         return next(new HttpError(error.message || "Server error", 500));
+    }
 }
 
 /*  Suivre ou ne plus suivre un user,  PATCH : /api/users/:id/follow-unfollow, protégée */

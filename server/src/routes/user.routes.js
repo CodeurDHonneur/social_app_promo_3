@@ -1,4 +1,5 @@
 const router = require("express").Router();
+const authMiddleware = require("../middlewares/auth.middleware");
 
 const {
     registerUser,
@@ -16,9 +17,9 @@ router.post("/register", registerUser);
 router.post("/login", loginUser);
 router.post("/logout", logoutUser);
 router.post("/renewAccessToken", renewAccessToken);
-router.get("/:id", getUser);
 router.get("/all", getUsers);
-router.patch("/:id", editUser);
+router.get("/:id", getUser);
+router.patch("/:id", authMiddleware, editUser);
 router.patch("/:id/follow-unfollow", followUnfollowerUser);
 router.post("/avatar", changeUserAvatar);
 
