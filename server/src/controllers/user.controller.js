@@ -2,6 +2,10 @@ const HttpError = require("../models/error.model");
 const UserModel = require("../models/user.model");
 const { createAccessToken, createRefreshToken, timeToMs, revokeRefreshToken, verifyRefreshToken } = require("../services/token.service");
 const { hashValue, compareValue } = require("../utils/hash.util");
+const {v4: uuid} = require("uuid");
+const path = require("path");
+const util = require("util");
+const cloudinary = require("../config/cloudinary.config");
 
 /* Enregistrement d'un utilisateur, POST : api/users/register */
 
@@ -201,7 +205,7 @@ const renewAccessToken = async (req, res, next) => {
         res.cookie('accessToken', accessToken, {
             httpOnly: true,
             sameSite: 'strict',
-            maxAge: timeToMs(process.env.JWT_ACCESS_TOKEN_EXPIRATION_TIME),
+            maxAge: timeToMs(process.env.JWT_ACCESS_TOKEN_EXPIRESIN),
         });
 
         // ✅ 6️⃣ Réponse au client
@@ -321,17 +325,154 @@ const editUser = async (req, res, next) => {
         });
 
     } catch (error) {
-         return next(new HttpError(error.message || "Server error", 500));
+        return next(new HttpError(error.message || "Server error", 500));
     }
 }
 
 /*  Suivre ou ne plus suivre un user,  PATCH : /api/users/:id/follow-unfollow, protégée */
-const followUnfollowerUser = (req, res, next) => {
+const followUnfollowerUser = async (req, res, next) => {
+    try {
 
+        const userToFollowId = req.params.id;
+
+        if (!userToFollowId) {
+            return next(new HttpError("Merci de choisir l'utilisateur à suivre.", 422));
+        }
+
+        if (!req.userId) {
+            return next(new HttpError("Authentification requise", 401));
+        }
+
+        if (req.userId == userToFollowId) {
+            return next(new HttpError("Vous ne pouvez pas vous suivre ou vous désaboner de vous-même", 422));
+        }
+
+        const userToFollow = await UserModel.findById(userToFollowId);
+        if (!userToFollow) {
+            return next(new HttpError("Utilisateur introuvable", 404));
+        }
+
+        const currentUser = await UserModel.findById(req.userId);
+        if (!userToFollow) {
+            return next(new HttpError("Désolé, nous n'avons pas pu vous authentifier.", 404));
+        }
+
+
+        const isFollower = userToFollow.followers.includes(req.userId);
+
+        // const isFollower = userToFollow.followers.find(param => param.toString() == req.userId.toString());
+
+        let updatedTargetUser;
+        let updatedCurrentUser;
+        let message;
+
+        if (!isFollower) {
+            // ➕ Suivre un utilisateur
+            updatedTargetUser = await UserModel.findByIdAndUpdate(
+                userToFollowId,
+                { $push: { followers: req.userId } },
+                { new: true }
+            );
+
+            updatedCurrentUser = await UserModel.findByIdAndUpdate(
+                req.userId,
+                { $push: { following: userToFollowId } },
+                { new: true }
+            );
+
+            message = "Utilisateur suivi avec succès ✅";
+        } else {
+            console.log("A retirer", req.userId)
+            updatedTargetUser = await UserModel.findByIdAndUpdate(
+                userToFollowId,
+                { $pull: { followers: req.userId } },
+                { new: true }
+            );
+
+            updatedCurrentUser = await UserModel.findByIdAndUpdate(
+                req.userId,
+                { $pull: { following: userToFollowId } },
+                { new: true }
+            );
+            message = "Utilisateur non suivi avec succès 📴";
+        }
+
+        // ✅ 6️⃣ Retourne une réponse claire
+        return res.status(200).json({
+            success: true,
+            message,
+            currentUser: {
+                id: updatedCurrentUser._id,
+                following: updatedCurrentUser.following,
+            },
+            targetUser: {
+                id: updatedTargetUser._id,
+                followers: updatedTargetUser.followers,
+            },
+        });
+    } catch (error) {
+        return next(new HttpError(error.message || "Erreur serveur", 500));
+    }
 }
 
 /* Méthode de modification de l'avatar d'un user, POST : /api/users/avatar, protégée */
-const changeUserAvatar = (req, res, next) => {
+const changeUserAvatar = async (req, res, next) => {
+
+    try {
+
+
+        // ✅ Vérifie si un fichier "avatar" est présent dans la requête
+        if (!req.files.avatar) {
+            // Si aucun fichier n’est fourni, on renvoie une erreur 422 (unprocessable entity)
+            return next(new HttpError("Please choose an image", 422));
+        }
+
+        // ✅ On récupère l’objet "avatar" depuis les fichiers envoyés
+        const { avatar } = req.files;
+
+        // ✅ Vérifie la taille du fichier (ici, max 500 ko)
+        if (avatar.size > 500000) {
+            return next(new HttpError("Profile picture too big. Should be less than 500kb", 422));
+        }
+
+        // ✅ Génération d’un nom unique pour le fichier uploadé
+        //    On sépare le nom du fichier et son extension, puis on ajoute un UUID
+        let fileName = avatar.name;
+        let splittedFilename = fileName.split(".");
+        let newFilename = splittedFilename[0] + uuid() + "." + splittedFilename[splittedFilename.length - 1];
+
+        // ✅ Définit le chemin complet où le fichier sera temporairement enregistré sur le serveur
+        const uploadPath = path.join(__dirname, "..", "uploads", newFilename);
+
+        // ✅ avatar.mv utilise un callback, donc on le "promisifie" pour pouvoir l'utiliser avec await
+        const mv = util.promisify(avatar.mv);
+
+        // ✅ Déplace le fichier uploadé vers le dossier "uploads"
+        await mv(uploadPath);
+
+        // ✅ Upload du fichier sur Cloudinary (service de stockage d’images)
+        //    On indique que c’est une ressource de type "image"
+        const result = await cloudinary.uploader.upload(uploadPath, { resource_type: "image" });
+
+        // ✅ Vérifie que Cloudinary a bien retourné une URL d’image valide
+        if (!result.secure_url) {
+            return next(new HttpError("Couldn't upload image to cloudinary", 422));
+        }
+
+        // ✅ Met à jour le champ "profilePhoto" de l'utilisateur connecté
+        //    avec l'URL sécurisée retournée par Cloudinary
+        const updatedUser = await UserModel.findByIdAndUpdate(
+            req.userId,                          // ID de l'utilisateur connecté
+            { profilePhoto: result.secure_url },   // Nouvelle photo de profil
+            { new: true }                          // Renvoie le document mis à jour
+        );
+
+
+        // ✅ Envoie la réponse au client avec le nouvel utilisateur mis à jour
+        return res.status(200).json(updatedUser);
+    } catch (error) {
+        return next(new HttpError(error.message || JSON.stringify(error), 500));
+    }
 
 }
 

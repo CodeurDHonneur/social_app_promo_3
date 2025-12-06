@@ -20,8 +20,8 @@ router.post("/renewAccessToken", renewAccessToken);
 router.get("/all", getUsers);
 router.get("/:id", getUser);
 router.patch("/:id", authMiddleware, editUser);
-router.patch("/:id/follow-unfollow", followUnfollowerUser);
-router.post("/avatar", changeUserAvatar);
+router.patch("/:id/follow-unfollow", authMiddleware, followUnfollowerUser);
+router.post("/avatar", authMiddleware, changeUserAvatar);
 
 
 module.exports = router;
