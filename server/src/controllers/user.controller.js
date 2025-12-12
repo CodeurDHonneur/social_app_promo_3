@@ -16,7 +16,7 @@ const registerUser = async (req, res, next) => {
 
         //vérification des champs obligatoires
         if (!fullName || !email || !password || !confirmPassword) {
-            return next(new HttpError("Merci de remplir les champs", 422));
+            return next(new HttpError("Merci de remplir tous les champs", 422));
         }
 
         //Normalisation de l'adresse mail
@@ -28,7 +28,7 @@ const registerUser = async (req, res, next) => {
         }
 
         if (password.length < 8) {
-            return next(new HttpError("Mot de passe trop court, 8 caractère au minimum", 422));
+            return next(new HttpError("Mot de passe trop court, 8 caractères au minimum", 422));
         }
 
 
@@ -103,12 +103,16 @@ const loginUser = async (req, res, next) => {
         sameSite: "strict",
         maxAge: timeToMs(process.env.JWT_REFRESH_TOKEN_EXPIRESIN)
     });
+   
+    console.log("user => ", user);
+
+    const {password: _, ...userInfo} = user._doc;
 
     res.status(200).json({
         success: true,
         message: "Connexion réussie",
         accessToken,
-
+        userInfo
     });
 }
 
